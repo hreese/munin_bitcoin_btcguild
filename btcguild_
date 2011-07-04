@@ -1,5 +1,7 @@
 #!/usr/bin/perl 
 
+# munin-run --servicedir . --sconfdir plugin-conf.d btcguild_ config
+
 use strict;
 use warnings;
 use Carp;
@@ -8,12 +10,15 @@ use LWP::UserAgent;
 use JSON;
 use Data::Dumper;
 
-my $contact_email = 'btcguild+munin@heiko-reese.de';
+# [btcguild_]
+# user miner
+# env.btcguild_api_key 1234567890...
+# env.btcguild_contact your@email-address.tld
 
 # set default api_key here
 my $api_key;
 
-# find API key
+# extract API key from filename
 ( my $scriptbasename, undef, undef ) = fileparse($0);
 if ( $scriptbasename =~ m/\w+_(\w{32})$/ ) {
     $api_key = $1;
@@ -24,21 +29,73 @@ else {
 
 # get data from btcguild
 my $response = get_data_offline();
+#my $response = get_data_online();
 
 # print config
 if ( defined $ARGV[0] && $ARGV[0] eq 'config' ) {
     do_config();
+	exit 0;
 }
 
 sub do_config {
     print <<EOL;
-multigraph pool_speed
+multigraph     pool_speed
 graph_title    Pool performance
 graph_category BTC
-graph_vlabel   Speed
+graph_vlabel   Hashes per second
+graph_args     --base 1000
+
+multigraph     earnings
+graph_title    Earnings
+graph_category BTC
+graph_vlabel   Bitcoins earned
+graph_args     --base 1000
+
+multigraph     worker_hashrate
+graph_title    Worker Hashrate
+graph_category BTC
+graph_vlabel   Hashes per second
+graph_args     --base 1000
 
 EOL
 
+	foreach ( keys %{ $response->{pool} } ) {
+	    if ( m/(\w+)_speed$/ ) {
+	        print <<"EOL";
+pool_speed.$1.draw AREASTACK
+pool_speed.$1.label $1
+EOL
+	    }
+	}
+}
+
+# Graph: pool
+foreach ( keys %{ $response->{pool} } ) {
+    next unless m/(\w+)_speed$/;
+    print <<"EOL";
+$_.draw AREASTACK
+$_.label $_
+$_.value $response->{pool}->{$_}
+EOL
+}
+
+# Graph: user
+foreach ( keys %{ $response->{user} } ) {
+    next if m/payouts/;
+    print <<"EOL";
+$_.draw LINE1
+$_.label $_
+$_.value $response->{user}->{$_}
+EOL
+}
+
+# Graph: Workers
+foreach my $worker ( keys %{ $response->{workers} } ) {
+    print <<"EOL";
+worker_$worker.draw LINE1
+worker_$worker.label $response->{workers}->{$worker}->{worker_name}
+worker_$worker.value $response->{workers}->{$worker}->{hash_rate}
+EOL
 }
 
 sub get_data_online {
@@ -46,7 +103,9 @@ sub get_data_online {
     # Create a user agent object
     my $ua = LWP::UserAgent->new;
     $ua->agent(
-        "BTCGuild Munin Grapher 0.1 (contact ${contact_email} for questions/abuse)"
+        defined $ENV{btcguild_contact} ?
+        "BTCGuild Munin Grapher (contact $ENV{btcguild_contact} for questions/abuse)" :
+        "BTCGuild Munin Grapher"
     );
 
     # Create a request
@@ -75,49 +134,4 @@ sub get_data_offline {
     );
 }
 
-# Graph: pool
-print <<EOL;
-EOL
-
-foreach ( keys %{ $response->{pool} } ) {
-    next unless m/_speed/;
-    print <<"EOL";
-$_.draw AREASTACK
-$_.label $_
-$_.value $response->{pool}->{$_}
-EOL
-}
-
-# Graph: user
-print <<EOL;
-
-graph_title    Earnings
-graph_category BTC
-graph_vlabel   Bitcoin
-EOL
-
-foreach ( keys %{ $response->{user} } ) {
-    next if m/payouts/;
-    print <<"EOL";
-$_.draw LINE1
-$_.label $_
-$_.value $response->{user}->{$_}
-EOL
-}
-
-# Graph: Workers
-print <<EOL;
-
-graph_title    Worker Hashrate
-graph_category BTC
-graph_vlabel   rounds
-EOL
-
-foreach my $worker ( keys %{ $response->{workers} } ) {
-    print <<"EOL";
-worker_$worker.draw LINE1
-worker_$worker.label $response->{workers}->{$worker}->{worker_name}
-worker_$worker.value $response->{workers}->{$worker}->{hash_rate}
-EOL
-}
 
